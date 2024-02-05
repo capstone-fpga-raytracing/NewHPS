@@ -95,15 +95,22 @@ int unmap_physical (void *, unsigned int);
 
 int main(void) {
     // volatile int * FPGA_SDRAM_BASE = (int *) SDRAM_BASE;
-    volatile int * FPGA_SDRAM_BASE_p = (int *) FPGA_SDRAM_BASE; // virtual address pointer to FPGA SDRAM
+    volatile int * FPGA_SDRAM_BASE_p = (int *) SDRAM_BASE; // virtual address pointer to FPGA SDRAM
     
     int fd = -1;               // used to open /dev/mem for access to physical addresses
     void *SDRAM_VIRTUAL;          // used to map physical addresses for the on-chip SDRAM
+    void *LW_VIRTUAL;
+
 
     if ((fd = open_physical (fd)) == -1)
         return (-1);
     if ((SDRAM_VIRTUAL = map_physical (fd, SDRAM_BASE, SDRAM_SPAN)) == NULL)
         return (-1);
+    if ((fd = open_physical (fd)) == -1)
+      return (-1);
+   if ((LW_VIRTUAL = map_physical (fd, LW_BRIDGE_BASE, LW_BRIDGE_SPAN)) == NULL)
+      return (-1);
+    
     printf("About to write to FPGA SDRAM\n");
     FPGA_SDRAM_BASE_p = (unsigned int *) (SDRAM_VIRTUAL);
    // Write to FPGA sdram
@@ -124,11 +131,13 @@ int main(void) {
     FPGA_SDRAM_BASE_p[14] = 0x1100;
 
     printf("About to trigger FPGA read\n");
-    volatile int* tFPGA_SDRAM_BASE = (int *) FPGA_SDRAM_TRIGGER; // Set to point to read trigger
+    volatile int* tFPGA_SDRAM_BASE = (int *) (LW_VIRTUAL + 0x3050); // Set to point to read trigger
     *tFPGA_SDRAM_BASE = 1; // trigger FPGA read
 
     printf("After trigger\n");
     unmap_physical (SDRAM_VIRTUAL, SDRAM_SPAN);   // release the physical-memory mapping
+    close_physical (fd);   // close /dev/mem
+    unmap_physical (LW_VIRTUAL, LW_BRIDGE_SPAN);   // release the physical-memory mapping
     close_physical (fd);   // close /dev/mem
 
    //  // Read from FPGA write
