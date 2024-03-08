@@ -11,7 +11,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/mman.h>
-#include "address_map_arm.h"
+#include "arm_memmap.h"
 
 /* Prototypes for functions used to access physical memory addresses */
 int open_physical(int);
