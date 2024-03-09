@@ -16,7 +16,7 @@
 #define SCENE_MAGIC 0x5343454E
 #define RTINTR_SYSFS "/sys/bus/platform/drivers/raytrace_intr/raytrace_intr"
 
-#define PERRORF(fmt, __VA_ARGS__) \
+#define PERRORF(fmt, ...) \
     fprintf(stderr, fmt ": %s\n", __VA_ARGS__, strerror(errno))
 
 

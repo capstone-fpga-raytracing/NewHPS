@@ -1,12 +1,15 @@
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <errno.h>
+
 #include "arm_memmap.h"
 
-#define PERRORF(fmt, __VA_ARGS__) \
+#define PERRORF(fmt, ...) \
     fprintf(stderr, fmt ": %s\n", __VA_ARGS__, strerror(errno))
 
 // fd to dev/mem.
