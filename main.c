@@ -14,7 +14,7 @@
 #define LISTEN_PORT 50000
 // 'SCEN' in ascii, used for endianness check
 #define SCENE_MAGIC 0x5343454E
-#define RTINTR_SYSFS "/sys/bus/platform/drivers/raytrace_intr/raytrace_intr"
+#define RTINTR_SYSFS "/sys/bus/platform/drivers/fpga_rtintr/fpga_rtintr"
 
 #define PERRORF(fmt, ...) \
     fprintf(stderr, fmt ": %s\n", __VA_ARGS__, strerror(errno))
@@ -172,8 +172,8 @@ int main(int argc, char** argv)
             perror("intr sysfs open failed\n");
             goto fail_rt;
         }
-        char rtstat;
-        if (read(intrfd, &rtstat, 1) == -1) 
+        int rtstat;
+        if (read(intrfd, &rtstat, 4) == -1) 
         {
             close(intrfd);
             perror("intr sysfs read failed\n");
@@ -183,7 +183,7 @@ int main(int argc, char** argv)
         }
         close(intrfd);
         
-        printf("Finished raytracing, status %d\n", (int)rtstat);
+        printf("Finished raytracing, status %d\n", rtstat);
 
         QUIT_IF_SIGINT
 
