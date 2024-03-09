@@ -4,6 +4,8 @@
 #include <linux/interrupt.h>
 #include <asm/io.h>
 
+#define RAYTRACE_BASEOFF 0x00003050
+
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Altera University Program");
 MODULE_DESCRIPTION("DE1SoC Test IRQ");
@@ -14,7 +16,7 @@ irq_handler_t irq_handler(int irq, void *dev_id, struct pt_regs *regs)
 {
 	// Increment the value on the LEDs
 	printk(KERN_INFO "Interrupt!\n");
-	ioread8(lwbridgebase + 0x00000010); 
+	ioread32(lwbridgebase + RAYTRACE_BASEOFF); 
 	iowrite32(ioread32(lwbridgebase) + 1, lwbridgebase);
 	
 
