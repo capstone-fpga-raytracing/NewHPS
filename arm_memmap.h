@@ -12,11 +12,12 @@
 #define FPGA_ONCHIP_SPAN       0x0003FFFF
 #define FPGA_CHAR_BASE         0xC9000000
 #define FPGA_CHAR_SPAN         0x00001FFF
-#define FPGA_SDRAM_TRIGGER     0xFF203050 
+
 
 /* Cyclone V FPGA devices */
 #define LW_BRIDGE_BASE         0xFF200000
-
+#define RAYTRACE_BASE          0xFF203050
+#define RAYTRACE_BASEOFF       0x00003050 // offset from LW_BRIDGE_BASE
 #define LEDR_BASE              0x00000000
 #define HEX3_HEX0_BASE         0x00000020
 #define HEX5_HEX4_BASE         0x00000030
@@ -35,6 +36,7 @@
 #define PIXEL_BUF_CTRL_BASE    0x00003020
 #define CHAR_BUF_CTRL_BASE     0x00003030
 #define AUDIO_BASE             0x00003040
+
 // Audio Core Registers
 #define FIFOSPACE              1               // word offset
 #define LDATA                  2               // word offset
