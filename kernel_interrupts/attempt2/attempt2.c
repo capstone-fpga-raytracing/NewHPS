@@ -10,12 +10,35 @@
 void *sdr_irq_mem;
 static uint8_t input_state;
 
+static DECLARE_WAIT_QUEUE_HEAD(interrupt_wq);
+
+static int interrupt_flag = 0;
+
+static ssize_t sdr_irq_show(struct device_driver *drv, char *buf)
+{
+	if (wait_event_interruptible(interrupt_wq, interrupt_flag != 0)) {
+		ret = -ERESTART;
+		goto release_and_exit;
+	}
+
+	interrupt_flag = 0;
+
+	buf[0] = input_state;
+	ret = 1;
+
+release_and_exit:
+	return ret;
+}
+
 static irqreturn_t sdr_irq_interrupt(int irq, void *dev_id)
 {
 	if (irq != UINPUT_INT_NUM)
 		return IRQ_NONE;
 
 	input_state = ioread8(sdr_irq_mem);
+
+	interrupt_flag = 1;
+	wake_up_interruptible(&interrupt_wq);
 
 	return IRQ_HANDLED;
 }
