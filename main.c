@@ -6,12 +6,13 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/mman.h>
+#include <errno.h>
 
 #include "arm_memmap.h"
-#include "ext/IO/io.h"
+#include "io.h"
 
 
-#define LISTEN_PORT 50000
+#define LISTEN_PORT "50000"
 // 'SCEN' in ascii, used for endianness check
 #define SCENE_MAGIC 0x5343454E
 #define RTINTR_SYSFS "/sys/bus/platform/drivers/fpga_rtintr/fpga_rtintr"
@@ -29,7 +30,7 @@ void* mmap_dev(unsigned int base, unsigned int span)
 {
     void* virt = mmap(NULL, span, (PROT_READ | PROT_WRITE), MAP_SHARED, MEMFD, base);
     if (virt == MAP_FAILED) {
-        PERRORF("mmap failed for 0x%p", base);
+        PERRORF("mmap failed for 0x%08x", base);
         close(MEMFD);
         return NULL;
     }
@@ -57,7 +58,8 @@ void sigint_handler(int signum)
     (void)signum;
     if (sigint == 0) {
         // fprintf is not signal-safe
-        write(STDERR_FILENO, SIGINT_MSG, SIGINT_MSGLEN);
+        ssize_t e = write(STDERR_FILENO, SIGINT_MSG, SIGINT_MSGLEN);
+        (void)e; // gcc Wunused-result
 
         TCP_close(ACCEPT_SOCK);
         TCP_close(LISTEN_SOCK);
@@ -115,9 +117,9 @@ int main(int argc, char** argv)
     {
         QUIT_IF_SIGINT
 
-        printf(DASHES);
+        if (verbose) { printf(DASHES); }
         printf("Waiting for connection from client...\n");
-        printf(DASHES);
+        if (verbose) { printf(DASHES); }
 
         // Wait for a connection from host
         ACCEPT_SOCK = TCP_accept2(LISTEN_SOCK, verbose);
