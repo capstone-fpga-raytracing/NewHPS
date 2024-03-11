@@ -189,7 +189,7 @@ int main(int argc, char** argv)
 
         QUIT_IF_SIGINT
 
-        unsigned resX = data[2], resY = data[3];
+        unsigned resX = data[1], resY = data[2];
         unsigned nbytes_img = resX * resY * 3;
        
         unsigned ncopy = nbytes_img / 4;
