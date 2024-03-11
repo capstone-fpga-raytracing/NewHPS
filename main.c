@@ -71,7 +71,7 @@ void sigint_handler(int signum)
 int main(int argc, char** argv)
 {
     bool verbose = false;
-    if (argc == 2 && (strcmp(argv[1], "-v") || strcmp(argv[1], "--verbose"))) {
+    if (argc == 2 && (strcmp(argv[1], "-v") == 0 || strcmp(argv[1], "--verbose") == 0)) {
         verbose = true;
     }
 
@@ -175,8 +175,8 @@ int main(int argc, char** argv)
         int rtstat;
         if (read(intrfd, &rtstat, 4) == -1) 
         {
-            close(intrfd);
             perror("intr sysfs read failed\n");
+            close(intrfd);
             goto fail_rt;
             // todo: read may also fail due to Ctrl+c. In this
             // case we probably want to reset the FPGA
