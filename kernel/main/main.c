@@ -121,7 +121,7 @@ static void __exit fpga_rtintr_exit(void)
     driver_unregister(&fpga_rtintr_driver);
 }
 
-MODULE_LICENSE("BSD");
+MODULE_LICENSE("Dual BSD/GPL");
 
 module_init(fpga_rtintr_init);
 module_exit(fpga_rtintr_exit);
