@@ -151,14 +151,14 @@ int main(int argc, char** argv)
             TCP_close(ACCEPT_SOCK);
             fprintf(stderr, "Endian check failed\n" ABANDON_MSG);
             continue;
-        }
-        data++; 
-        nrecv = (nrecv / 4) - 1;
-
+        }  
+        unsigned nbytes_img = data[1] * data[2] * 3;
+        
         // Copy data to SDRAM.
         // this is slow. there are faster ways of doing this:
         // https://people.ece.cornell.edu/land/courses/ece5760/DE1_SOC/HPS_peripherials/FPGA_addr_index.html
-        for (int i = 0; i < nrecv; ++i) {
+        nrecv /= 4;
+        for (int i = 1; i < nrecv; ++i) {
             sdram[i] = data[i];
         }
         free(recvbuf);
@@ -189,9 +189,6 @@ int main(int argc, char** argv)
         printf("Finished raytracing, status 0x%02x\n", rtstat);
 
         QUIT_IF_SIGINT
-
-        unsigned resX = data[1], resY = data[2];
-        unsigned nbytes_img = resX * resY * 3;
        
         unsigned ncopy = nbytes_img / 4;
         // align to 32-bit, unaligned reads from SDRAM are not supported
