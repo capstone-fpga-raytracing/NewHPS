@@ -1,5 +1,6 @@
 
 #include <stdlib.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -92,7 +93,7 @@ int main(int argc, char** argv)
     }
 
     volatile unsigned* sdram = (unsigned*)(vsdram);
-    volatile unsigned* rtdev = (unsigned*)(lwbase + RAYTRACE_BASEOFF);
+    volatile uint8_t* rtdev = (uint8_t*)(lwbase + RAYTRACE_BASEOFF);
 
     // Install ctrl+c handler to allow server to gracefully quit
     // (otherwise TCP port can be broken until OS restart)
@@ -174,8 +175,8 @@ int main(int argc, char** argv)
             perror("intr sysfs open failed\n");
             goto fail_rt;
         }
-        int rtstat;
-        if (read(intrfd, &rtstat, 4) == -1) 
+        uint8_t rtstat;
+        if (read(intrfd, &rtstat, 1) == -1) 
         {
             perror("intr sysfs read failed\n");
             close(intrfd);
@@ -185,7 +186,7 @@ int main(int argc, char** argv)
         }
         close(intrfd);
         
-        printf("Finished raytracing, status %d\n", rtstat);
+        printf("Finished raytracing, status 0x%02x\n", rtstat);
 
         QUIT_IF_SIGINT
 

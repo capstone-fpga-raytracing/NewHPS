@@ -16,7 +16,7 @@ irq_handler_t irq_handler(int irq, void *dev_id, struct pt_regs *regs)
 {
 	// Increment the value on the LEDs
 	printk(KERN_INFO "Interrupt!\n");
-	ioread32(lwbridgebase + RAYTRACE_BASEOFF); 
+	ioread8(lwbridgebase + RAYTRACE_BASEOFF); 
 	iowrite32(ioread32(lwbridgebase) + 1, lwbridgebase);
 	
 

@@ -11,7 +11,7 @@
 #include <linux/interrupt.h>
 #include <linux/spinlock_types.h>
 
-#define RTINTR_BASE 0xff203054
+#define RTINTR_BASE 0xff203050
 #define RTINTR_SIZE 4
 #define RTINTR_IRQ 73
 
@@ -21,7 +21,7 @@ static DEFINE_SEMAPHORE(intr_mutex);
 static DECLARE_WAIT_QUEUE_HEAD(intr_wq);
 
 static int intr_flag = 0;
-static uint32_t end_rtstat;
+static uint8_t end_rtstat;
 static DEFINE_SPINLOCK(intr_flag_lock);
 
 static irqreturn_t fpga_rt_interrupt(int irq, void *dev_id)
@@ -32,7 +32,7 @@ static irqreturn_t fpga_rt_interrupt(int irq, void *dev_id)
 
     spin_lock(&intr_flag_lock);
     intr_flag = 1;
-    end_rtstat = ioread32(rtmem);
+    end_rtstat = ioread8(rtmem);
     spin_unlock(&intr_flag_lock);
 
     wake_up_interruptible(&intr_wq);
@@ -60,8 +60,7 @@ static ssize_t fpga_rtintr_show(struct device_driver *drv, char *buf)
     intr_flag = 0;
     spin_unlock(&intr_flag_lock);
 
-    memcpy(buf, &end_rtstat, 4);
-
+    buf[0] = end_rtstat;
     up(&intr_mutex);
     return 1;
 }
@@ -76,14 +75,17 @@ static DRIVER_ATTR(fpga_rtintr, S_IRUSR, fpga_rtintr_show, fpga_rtintr_store);
 
 static int __init fpga_rtintr_init(void)
 {
-    int ret = driver_register(&fpga_rtintr_driver);
+    int ret;
+    struct resource* res;
+
+    ret = driver_register(&fpga_rtintr_driver);
     if (ret < 0) { return ret; }
 
     // make sysfs file
     ret = driver_create_file(&fpga_rtintr_driver, &driver_attr_fpga_rtintr);
     if (ret < 0) { goto fail_sysfs; }
 
-    struct resource* res = request_mem_region(RTINTR_BASE, RTINTR_SIZE, "fpga_rtintr");
+    res = request_mem_region(RTINTR_BASE, RTINTR_SIZE, "fpga_rtintr");
     if (res == NULL) {
         ret = -EBUSY;
         goto fail_rqmem;
