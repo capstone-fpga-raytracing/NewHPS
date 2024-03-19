@@ -12,17 +12,17 @@
 #include "arm_memmap.h"
 #include "io.h"
 
-
-#define LISTEN_PORT "50000"
-// 'SCEN' in ascii, used for endianness check
-#define SCENE_MAGIC 0x5343454E
-#define RTINTR_SYSFS "/sys/bus/platform/drivers/fpga_rtintr/fpga_rtintr"
-
 #define PERRORF(fmt, ...) \
     fprintf(stderr, fmt ": %s\n", __VA_ARGS__, strerror(errno))
 
+#define LISTEN_PORT "50000"
+#define SCENE_MAGIC 0x5343454E
+
 
 static int MEMFD = -1; // fd to dev/mem
+static void* SDRAM;
+static void* LWBRIDGE; // todo: move trigger to sysfs
+
 static socket_t LISTEN_SOCK = INV_SOCKET;
 static socket_t ACCEPT_SOCK = INV_SOCKET;
 
@@ -48,17 +48,45 @@ int munmap_dev(void* virt, unsigned int span)
     return e;
 }
 
-volatile sig_atomic_t sigint = 0;
+int map_devices(void)
+{
+    MEMFD = open("/dev/mem", (O_RDWR | O_SYNC));
+    if (MEMFD == -1) {
+        fprintf(stderr, "failed to open /dev/mem\n");
+        return -1;
+    }
 
-// strlen may not be signal safe in our linux version
+    SDRAM = mmap_dev(SDRAM_BASE, SDRAM_SPAN);
+    if (!SDRAM) { return -1; }
+    LWBRIDGE = mmap_dev(LW_BRIDGE_BASE, LW_BRIDGE_SPAN);
+    if (!LWBRIDGE) {
+        munmap_dev(SDRAM, SDRAM_SPAN);
+        return -1;
+    }
+
+    return 0;
+}
+
+void unmap_devices()
+{
+    munmap_dev(SDRAM, SDRAM_SPAN);
+    munmap_dev(LWBRIDGE, LW_BRIDGE_SPAN);
+    close(MEMFD);
+}
+
+static volatile sig_atomic_t sigint = 0;
+
+// strlen may not be signal safe in our version of linux?
 #define SIGINT_MSG "Received ctrl+c, quitting...\n"
 #define SIGINT_MSGLEN (sizeof(SIGINT_MSG)-1)
+
+#define QUIT_IF_SIGINT if (sigint == 1) { goto fail; }
 
 void sigint_handler(int signum) 
 {
     (void)signum;
     if (sigint == 0) {
-        // fprintf is not signal-safe
+        // fprintf is not signal-safe, use write
         ssize_t e = write(STDERR_FILENO, SIGINT_MSG, SIGINT_MSGLEN);
         (void)e; // gcc Wunused-result
 
@@ -71,6 +99,10 @@ void sigint_handler(int signum)
     }
 }
 
+// serialized data, format in host.
+extern int raytrace(unsigned* data, int size, unsigned char** pimg, int* pimg_size);
+
+
 int main(int argc, char** argv)
 {
     bool verbose = false;
@@ -78,22 +110,9 @@ int main(int argc, char** argv)
         verbose = true;
     }
 
-    MEMFD = open("/dev/mem", (O_RDWR | O_SYNC));
-    if (MEMFD == -1) {
-        fprintf(stderr, "failed to open /dev/mem\n");
+    if (map_devices() != 0) {
         return -1;
     }
-
-    void* vsdram = mmap_dev(SDRAM_BASE, SDRAM_SPAN);
-    if (!vsdram) { return -1; }
-    void* lwbase = mmap_dev(LW_BRIDGE_BASE, LW_BRIDGE_SPAN);
-    if (!lwbase) {
-        munmap_dev(vsdram, SDRAM_SPAN);
-        return -1;
-    }
-
-    volatile unsigned* sdram = (unsigned*)(vsdram);
-    volatile uint8_t* rtdev = (uint8_t*)(lwbase + RAYTRACE_BASEOFF);
 
     // Install ctrl+c handler to allow server to gracefully quit
     // (otherwise TCP port can be broken until OS restart)
@@ -104,8 +123,6 @@ int main(int argc, char** argv)
         fprintf(stderr, "failed to set sigint handler");
         goto fail;
     }
-
-#define QUIT_IF_SIGINT if (sigint == 1) { goto fail; }
 
     LISTEN_SOCK = TCP_listen2(LISTEN_PORT, true, verbose);
     if (LISTEN_SOCK == INV_SOCKET) { goto fail; }
@@ -151,55 +168,15 @@ int main(int argc, char** argv)
             TCP_close(ACCEPT_SOCK);
             fprintf(stderr, "Endian check failed\n" ABANDON_MSG);
             continue;
-        }  
-        unsigned nbytes_img = data[1] * data[2] * 3;
+        } 
         
-        // Copy data to SDRAM.
-        // this is slow. there are faster ways of doing this:
-        // https://people.ece.cornell.edu/land/courses/ece5760/DE1_SOC/HPS_peripherials/FPGA_addr_index.html
-        nrecv /= 4;
-        for (int i = 1; i < nrecv; ++i) {
-            sdram[i] = data[i];
-        }
-        free(recvbuf);
-        recvbuf = NULL;
-
-        QUIT_IF_SIGINT
-
-        printf("Start raytracing...\n");
-        *rtdev = 1;
-
-        // Wait for interrupt from FPGA
-        int intrfd = open(RTINTR_SYSFS, O_RDONLY);
-        if (intrfd == -1) {
-            perror("intr sysfs open failed\n");
+        char* sendbuf;
+        int img_size;
+        if (!raytrace(data, nrecv / 4, &sendbuf, &img_size) != 0) {
             goto fail_rt;
         }
-        uint8_t rtstat;
-        if (read(intrfd, &rtstat, 1) == -1) 
-        {
-            perror("intr sysfs read failed\n");
-            close(intrfd);
-            goto fail_rt;
-            // todo: read may also fail due to Ctrl+c. In this
-            // case we probably want to reset the FPGA
-        }
-        close(intrfd);
         
-        printf("Finished raytracing, status 0x%02x\n", rtstat);
-
         QUIT_IF_SIGINT
-       
-        unsigned ncopy = nbytes_img / 4;
-        // align to 32-bit, unaligned reads from SDRAM are not supported
-        if ((nbytes_img % 4) != 0) { 
-            ncopy++;
-        }
-
-        unsigned* sendbuf = (unsigned*)malloc(ncopy);
-        for (unsigned i = 0; i < ncopy; ++i) {
-            sendbuf[i] = sdram[i];
-        }
 
         if (TCP_send2(ACCEPT_SOCK, (char*)sendbuf, nbytes_img, verbose) != nbytes_img) {
             free(sendbuf);
@@ -217,9 +194,6 @@ fail_rt:
     TCP_close(LISTEN_SOCK);
 
 fail:
-    munmap_dev(vsdram, SDRAM_SPAN);
-    munmap_dev(lwbase, LW_BRIDGE_SPAN);
-    close(MEMFD);
-
+    unmap_devices();
     return -1;   
 }
