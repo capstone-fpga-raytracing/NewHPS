@@ -19,9 +19,9 @@
 #define SCENE_MAGIC 0x5343454E
 
 
-static int MEMFD = -1; // fd to dev/mem
-static void* SDRAM;
-static void* LWBRIDGE; // todo: move trigger to sysfs
+int MEMFD = -1; // fd to dev/mem
+void* SDRAM;
+void* LWBRIDGE; // todo: move trigger to sysfs
 
 static socket_t LISTEN_SOCK = INV_SOCKET;
 static socket_t ACCEPT_SOCK = INV_SOCKET;
@@ -100,7 +100,7 @@ void sigint_handler(int signum)
 }
 
 // serialized data, format in host.
-extern int raytrace(unsigned* data, int size, unsigned char** pimg, int* pimg_size);
+extern int raytrace(unsigned* data, int size, char** pimg, int* pimg_size);
 
 
 int main(int argc, char** argv)
@@ -180,7 +180,7 @@ int main(int argc, char** argv)
         
         QUIT_IF_SIGINT
 
-        if (TCP_send2(ACCEPT_SOCK, (char*)sendbuf, nbytes_img, verbose) != nbytes_img) {
+        if (TCP_send2(ACCEPT_SOCK, sendbuf, img_size, verbose) != img_size) {
             free(sendbuf);
             fprintf(stderr, ABANDON_MSG);
             continue;

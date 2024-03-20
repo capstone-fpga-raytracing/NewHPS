@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 #include "arm_memmap.h"
 
@@ -29,6 +30,19 @@ do { \
     for (uint i = 0; i < (count); ++i) \
         (dest)[i] = (src)[i]; \
 } while(0);
+
+inline int fip_div(int x, int y)
+{
+    int64_t temp_dividend = (int64_t)x << 16;
+    int64_t temp_res = temp_dividend / y;
+    return (int)temp_res;
+}
+
+inline int fip_mult(int x, int y)
+{
+    int64_t temp_res = (int64_t)x * (int64_t)y;
+    return (int)(temp_res >> 16);
+}
 
 uint fip_sqrt(uint x)
 {
@@ -73,28 +87,13 @@ void fip_normalize(int vec[3])
     }
 }
 
-inline int fip_div(int x, int y)
-{
-    int64_t temp_dividend = (int64_t)x << 16;
-    int64_t temp_res = temp_dividend / y;
-    return (int)temp_res;
-}
-
-inline int fip_mult(int x, int y)
-{
-    int64_t temp_res = (int64_t)x * (int64_t)y;
-    return (int)(temp_res >> 16);
-}
-
 typedef struct Camera
 {
     int eye[3];
-    int u[3], v[3], w[3];
-    uint focal_length;
-
     // precalculate
-    int base_u, base_v;
-    int incr_u, incr_v;
+    int base_dir[3];
+    int incr_diru[3];
+    int incr_dirv[3];
 }
 Camera;
 
@@ -104,31 +103,38 @@ typedef struct Ray
     int dir[3];
 } Ray;
 
-void init_camera(const int* p, Camera* cam)
+void init_camera(const int* p, Camera* cam, int resX, int resY)
 {
+    int u[3], v[3], w[3];
     memcpy(cam->eye, p, sizeof(int) * 3); p += 3;
-    memcpy(cam->u, p, sizeof(int) * 3);   p += 3;
-    memcpy(cam->v, p, sizeof(int) * 3);   p += 3;
-    memcpy(cam->w, p, sizeof(int) * 3);   p += 3;
+    memcpy(u, p, sizeof(int) * 3);   p += 3;
+    memcpy(v, p, sizeof(int) * 3);   p += 3;
+    memcpy(w, p, sizeof(int) * 3);   p += 3;
 
-    cam->focal_length = p[0];
-    int width = p[1];
-    int height = p[2];
+    int focal_len = p[0];
+    int width = p[1], height = p[2];
 
-    int fresX = RESOLUTION_X << 16;
-    int fresY = RESOLUTION_Y << 16;
-    int aspect_ratio = fip_div(fresX, fresY);
+    int world_du = fip_div(width, resX << 16);
+    int world_dv = fip_div(height, resY << 16);
+    int aspratio = fip_div(resX << 16, resY << 16);
 
-    int world_dx = fip_div(width, fresX);
-    int world_dy = fip_div(height, fresY);
+    int base_u = fip_mult(aspratio >> 1, world_du - width);
+    int incr_u = fip_mult(aspratio, world_du);
 
-    // mag_u = (0.5 * aspect_ratio * (world_dx - width)) + (aspect_ratio * world_dx * pixel_col)
-    cam->base_u = fip_mult(aspect_ratio >> 1, world_dx - width);
-    cam->incr_u = fip_mult(aspect_ratio, world_dx);
+    int base_v = (height - world_dv) >> 1;
+    int incr_v = -world_dv;
 
-    // mag_v = 0.5(height - world_dy) - (world_dy * pixel_row)
-    cam->base_v = (height - world_dy) >> 1;
-    cam->incr_v = -world_dy;
+    cam->base_dir[0] = fip_mult(base_u, u[0]) + fip_mult(base_v, v[0]) - fip_mult(focal_len, w[0]);
+    cam->base_dir[1] = fip_mult(base_u, u[1]) + fip_mult(base_v, v[1]) - fip_mult(focal_len, w[1]);
+    cam->base_dir[2] = fip_mult(base_u, u[2]) + fip_mult(base_v, v[2]) - fip_mult(focal_len, w[2]);
+
+    cam->incr_diru[0] = fip_mult(incr_u, u[0]);
+    cam->incr_diru[1] = fip_mult(incr_u, u[1]);
+    cam->incr_diru[2] = fip_mult(incr_u, u[2]);
+
+    cam->incr_dirv[0] = fip_mult(incr_v, v[0]);
+    cam->incr_dirv[1] = fip_mult(incr_v, v[1]);
+    cam->incr_dirv[2] = fip_mult(incr_v, v[2]);
 }
 
 bool ray_intersect_box(const Ray* ray, const int* pbbox)
@@ -240,42 +246,17 @@ void new_blinn_phong_shading(
     o_total_light[2] = MIN(o_total_light[2], FIP_ALMOST_ONE);
 }
 
-int raytrace(unsigned* data, int size, unsigned char** pimg, int* pimg_size)
+int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
 {
     int resX = data[1], resY = data[2];
     *pimg_size = resX * resY * 3;
 
     Camera cam;
-    init_camera(&data[data[5]], &cam);
-
-    int world_du = fip_div(cam.width, resX << 16);
-    int world_dv = fip_div(cam.height, resY << 16);
-    int aspratio = fip_div(resX << 16, resY << 16);
-
-    int base_u = fip_mult(aspratio >> 1, world_du - cam.width);
-    int incr_u = fip_mult(aspratio, world_du);
-
-    int base_v = (cam.height - world_dv) >> 1;
-    int incr_v = -world_dv;
-
-    int base_dir[3];
-    base_dir[0] = fip_mult(base_u, cam.u[0]) + fip_mult(base_v, cam.v[0]) - fip_mult(cam.focal_length, cam.w[0]);
-    base_dir[1] = fip_mult(base_u, cam.u[1]) + fip_mult(base_v, cam.v[1]) - fip_mult(cam.focal_length, cam.w[1]);
-    base_dir[2] = fip_mult(base_u, cam.u[2]) + fip_mult(base_v, cam.v[2]) - fip_mult(cam.focal_length, cam.w[2]);
-
-    int incr_diru[3];
-    incr_diru[0] = fip_mult(incr_u, cam.u[0]);
-    incr_diru[1] = fip_mult(incr_u, cam.u[1]);
-    incr_diru[2] = fip_mult(incr_u, cam.u[2]);
-
-    int incr_dirv[3];
-    incr_dirv[0] = fip_mult(incr_v, cam.v[0]);
-    incr_dirv[1] = fip_mult(incr_v, cam.v[1]);
-    incr_dirv[2] = fip_mult(incr_v, cam.v[2]);
+    init_camera(&data[data[5]], &cam, resX, resY);
 
     Ray ray;
     memcpy(ray.origin, cam.eye, 3 * sizeof(int));
-    memcpy(ray.dir, base_dir, 3 * sizeof(int));
+    memcpy(ray.dir, cam.base_dir, 3 * sizeof(int));
 
     int numBV = data[4];
     int numL = data[3];
@@ -375,25 +356,25 @@ int raytrace(unsigned* data, int size, unsigned char** pimg, int* pimg_size)
             pixelBuf[3 * (resX * i + j) + 1] = (byte)(light[1] >> 8);
             pixelBuf[3 * (resX * i + j) + 2] = (byte)(light[2] >> 8);
 
-            ray.dir[0] += incr_diru[0];
-            ray.dir[1] += incr_diru[1];
-            ray.dir[2] += incr_diru[2];
+            ray.dir[0] += cam.incr_diru[0];
+            ray.dir[1] += cam.incr_diru[1];
+            ray.dir[2] += cam.incr_diru[2];
             // rdir += incr_diru;
         }
 
-        ray.dir[0] -= (resX * incr_diru[0]);
-        ray.dir[1] -= (resX * incr_diru[1]);
-        ray.dir[2] -= (resX * incr_diru[2]);
+        ray.dir[0] -= (resX * cam.incr_diru[0]);
+        ray.dir[1] -= (resX * cam.incr_diru[1]);
+        ray.dir[2] -= (resX * cam.incr_diru[2]);
         // rdir -= (sc.R.first * incr_diru); // reset
 
-        ray.dir[0] += incr_dirv[0];
-        ray.dir[1] += incr_dirv[1];
-        ray.dir[2] += incr_dirv[2];
+        ray.dir[0] += cam.incr_dirv[0];
+        ray.dir[1] += cam.incr_dirv[1];
+        ray.dir[2] += cam.incr_dirv[2];
         // rdir += incr_dirv;
     }
 
     printf("Finished raytracing");
-    *pimg = pixelBuf;
+    *pimg = (char*)pixelBuf;
     return 0;
 
 fail_rt:
