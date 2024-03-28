@@ -172,7 +172,7 @@ int main(int argc, char** argv)
         
         char* sendbuf;
         int img_size;
-        if (!raytrace(data, nrecv / 4, &sendbuf, &img_size) != 0) {
+        if (raytrace(data, nrecv / 4, &sendbuf, &img_size) != 0) {
             free(recvbuf);
             goto fail_rt;
         }

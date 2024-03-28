@@ -17,6 +17,7 @@ extern void* LWBRIDGE;
 
 #define FIP_MIN (-2147483647 - 1) // -32768.0 (min)
 #define FIP_MAX 2147483647 // 32767.99998 (max)
+#define FIP_ONE 0x00010000 // 1
 
 #define RTINTR_SYSFS "/sys/bus/platform/drivers/fpga_rtintr/fpga_rtintr"
 
@@ -48,6 +49,37 @@ uint fip_sqrt(uint x)
 {
     float val = sqrtf((float)x / 65536);
     return (uint)(val * (1 << 16));
+}
+
+// saturate (i.e. limit to fip bounds).
+inline int fip_sat(int64_t val)
+{
+    if (val > FIP_MAX) {
+        return FIP_MAX;
+    }
+    else if (val < FIP_MIN) {
+        return FIP_MIN;
+    }
+    return (int)val;
+}
+
+inline int fip_sat_div(int x, int y)
+{
+    int64_t temp = (int64_t)x << 16;
+    int64_t res = temp / y;
+    return fip_sat(res);
+}
+
+inline int fip_sat_mult(int x, int y)
+{
+    int64_t res = (int64_t)x * (int64_t)y;
+    return fip_sat(res >> 16);
+}
+
+inline int fip_sat_add(int x, int y)
+{
+    int64_t res = (int64_t)x + y;
+    return fip_sat(res);
 }
 
 void fip_cross(const int v0[3], const int v1[3], int output[3]) {
@@ -85,6 +117,21 @@ void fip_normalize(int vec[3])
         vec[2] <<= 2;
         fip_normalize(vec);
     }
+}
+
+int fip_det(const int v0[3], const int v1[3], const int v2[3]) {
+    /*
+    |a b c| v0
+    |d e f| v1
+    |g h i| v2
+    det = a(ei-fh) + b(fg-di) + c(dh-eg)
+    */
+    int sub1, sub2, sub3;
+    sub1 = fip_mult(v1[1], v2[2]) - fip_mult(v1[2], v2[1]);
+    sub2 = fip_mult(v1[2], v2[0]) - fip_mult(v1[0], v2[2]);
+    sub3 = fip_mult(v1[0], v2[1]) - fip_mult(v1[1], v2[0]);
+    return fip_mult(v0[0], sub1) + fip_mult(v0[1], sub2) + fip_mult(v0[2], sub3);
+
 }
 
 typedef struct Camera
@@ -246,8 +293,89 @@ void new_blinn_phong_shading(
     o_total_light[2] = MIN(o_total_light[2], FIP_ALMOST_ONE);
 }
 
+bool new_ray_intersect_tri(const int* vs, const Ray* ray, int* pt)
+{
+    // solve the system by Cramer's rule:
+    // [T1, T2, -D] |a|
+    //              |b| = E - P0, where
+    //              |t|
+    // Triangle = aT1 + bT2 + P0 for a >= 0, b >=0, a + b <= 1.
+
+    const int v[3][3] = {
+        { vs[0], vs[1], vs[2] },
+        { vs[3], vs[4], vs[5] },
+        { vs[6], vs[7], vs[8] },
+    };
+
+    const int sys[4][3] = {
+        { v[1][0] - v[0][0], v[1][1] - v[0][1], v[1][2] - v[0][2] }, // vert[1] - vert[0]
+        { v[2][0] - v[0][0], v[2][1] - v[0][1], v[2][2] - v[0][2] }, // vert[2] - vert[0]
+        { -ray->dir[0], -ray->dir[1], -ray->dir[2] }, // -ray.dir
+        { ray->origin[0] - v[0][0], ray->origin[1] - v[0][1], ray->origin[2] - v[0][2] } // ray.origin - vert[0]
+    };
+
+    int det_coeffs = fip_det(sys[0], sys[1], sys[2]);
+    if (det_coeffs == 0) // no unique soln (very unlikely)
+        return false;
+
+    int a = fip_sat_div(fip_det(sys[3], sys[1], sys[2]), det_coeffs);
+    int b = fip_sat_div(fip_det(sys[0], sys[3], sys[2]), det_coeffs);
+    int t = fip_sat_div(fip_det(sys[0], sys[1], sys[3]), det_coeffs);
+
+    if (a >= 0 && b >= 0 && fip_sat_add(a, b) <= FIP_ONE && t >= 0)
+    {
+        *pt = t;
+        return true;
+    }
+    else return false;
+}
+
 int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
 {
+    volatile int* sdram = (int*)(SDRAM);
+    volatile uint8_t* rtdev = (uint8_t*)(LWBRIDGE + RAYTRACE_BASEOFF);
+
+    sdram[0] = 0; sdram[1] = 0; sdram[2] = 1 << 16;
+    sdram[3] = 0; sdram[4] = 0; sdram[5] = -1 << 16;
+    sdram[6] = 1;
+
+    sdram[7] = 0;
+    sdram[8] = 2 << 16;
+    sdram[9] = -2 << 16;
+    sdram[10] = -2 << 16;
+    sdram[11] = -2 << 16;
+    sdram[12] = -2 << 16;
+    sdram[13] = 2 << 16;
+    sdram[14] = -2 << 16;
+    sdram[15] = -2 << 16;
+
+    *rtdev = 1;
+
+    int intrfd = open(RTINTR_SYSFS, O_RDONLY);
+    if (intrfd == -1) {
+        perror("intr sysfs open failed\n");
+        //goto fail_rt;
+        return -1;
+    }
+    uint8_t rtstat;
+    if (read(intrfd, &rtstat, 1) == -1)
+    {
+        perror("intr sysfs read failed\n");
+        close(intrfd);
+        return -1;
+        // todo: read may also fail due to Ctrl+c. In this
+        // case we probably want to reset the FPGA
+    }
+    close(intrfd);
+
+    int hit = sdram[6];
+    int t = sdram[7];
+    int tri_id = sdram[8];
+
+    printf("hit: %d, t: %d, tri_id: %d\n\n", hit, t, tri_id);
+    return -1;
+
+    /*
     int resX = data[1], resY = data[2];
     *pimg_size = resX * resY * 3;
 
@@ -266,8 +394,7 @@ int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
     const int* const FMtop = &data[data[9]];
     const int* const BVtop = &data[data[6]];
 
-    volatile unsigned* sdram = (unsigned*)(SDRAM);
-    volatile uint8_t* rtdev = (uint8_t*)(LWBRIDGE + RAYTRACE_BASEOFF);
+    
 
     const int* Bvp = BVtop; // start of each BV
     const int* Vp = FVtop; // verts in each BV
@@ -295,7 +422,8 @@ int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
             {
                 if (ray_intersect_box(&ray, Bvp))
                 {
-                    //const int* vs = Vp;
+                    //printf("Processing BV %d\n", k);
+                    const int* vs = Vp;
                     int bv_ntris = Bvp[6];
 
                     sdram[6] = bv_ntris;
@@ -304,15 +432,20 @@ int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
                     // https://people.ece.cornell.edu/land/courses/ece5760/DE1_SOC/HPS_peripherials/FPGA_addr_index.html
                     VOLATILE_MEMCPY32(sdram + 7, Vp, bv_ntris * 9);
 
-                    //for (int l = 0; l < bv_ntris; ++l)
-                    //{
-                    //    int t;
-                    //    if (new_ray_intersect_tri(vs, &ray, &t) && t < min_t) {
-                    //        min_t = t;
-                    //        min_tri_id = (vs - FVtop) / 9;
-                    //    }
-                    //    vs += 9;
-                    //}
+                    int cpu_min_t = FIP_MAX;
+                    int cpu_min_id = -1;
+                    int cpu_hit = 0;
+
+                    for (int l = 0; l < bv_ntris; ++l)
+                    {
+                        int t;
+                        if (new_ray_intersect_tri(vs, &ray, &t) && t < cpu_min_t) {
+                            cpu_hit = 1;
+                            cpu_min_t = t;
+                            cpu_min_id = (vs - FVtop) / 9;
+                        }
+                        vs += 9;
+                    }
 
                     *rtdev = 1; // start intersection
 
@@ -335,11 +468,18 @@ int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
 
                     int batch_hit = sdram[6];
                     int batch_t = sdram[7];
-                    int batch_tri_id = sdram[8];
+                    int batch_tri_id = sdram[8] + ((Vp - FVtop) / 9);
 
                     if (batch_hit && batch_t < min_t) {
                         min_t = batch_t;
                         min_tri_id = batch_tri_id;
+                    }
+
+                    if (cpu_hit != batch_hit) {
+                        printf("batch id: %d\n", k);
+                        printf("ray: %d %d %d %d %d %d\n", ray.origin[0], ray.origin[1], ray.origin[2], ray.dir[0], ray.dir[1], ray.dir[2]);
+                        printf("cpu_hit: %d, cpu_t: %d, cpu_tri_id: %d\n", cpu_hit, cpu_min_t, cpu_min_id);
+                        printf("batch_hit: %d, batch_t: %d, batch_tri_id: %d\n\n", batch_hit, batch_t, batch_tri_id);
                     }
                 }
 
@@ -373,13 +513,16 @@ int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
         // rdir += incr_dirv;
     }
 
-    printf("Finished raytracing");
+    printf("Finished raytracing\n");
     *pimg = (char*)pixelBuf;
     return 0;
 
 fail_rt:
     free(pixelBuf);
     return -1;
+    */
+    return 0;
+
 
 
     //for (int i = 1; i < nrecv; ++i) {
