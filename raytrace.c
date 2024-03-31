@@ -26,11 +26,12 @@ extern void* LWBRIDGE;
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 
-#define VOLATILE_MEMCPY32(dest, src, count) \
-do { \
-    for (uint i = 0; i < (count); ++i) \
-        (dest)[i] = (src)[i]; \
-} while(0);
+
+inline void VOLATILE_MEMCPY32(volatile int* dest, const int* src, uint count)
+{
+    for (uint i = 0; i < count; ++i)
+        dest[i] = src[i];
+}
 
 inline int fip_div(int x, int y)
 {
@@ -334,23 +335,29 @@ int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
 {
     volatile int* sdram = (int*)(SDRAM);
     volatile uint8_t* rtdev = (uint8_t*)(LWBRIDGE + RAYTRACE_BASEOFF);
-
+    /*
+    // ray
     sdram[0] = 0; sdram[1] = 0; sdram[2] = 1 << 16;
     sdram[3] = 0; sdram[4] = 0; sdram[5] = -1 << 16;
-    sdram[6] = 1;
+    
+    #define NTRIS 3
 
-    sdram[7] = 0;
-    sdram[8] = 2 << 16;
-    sdram[9] = -2 << 16;
-    sdram[10] = -2 << 16;
-    sdram[11] = -2 << 16;
-    sdram[12] = -2 << 16;
-    sdram[13] = 2 << 16;
-    sdram[14] = -2 << 16;
-    sdram[15] = -2 << 16;
+    const int tris[NTRIS][9] = {
+        { 0, 2 << 16, -2 << 16, -2 << 16, -2 << 16, -2 << 16, 2 << 16, -2 << 16, -2 << 16 },
+        { 0, 2 << 16, 0, -2 << 16, -2 << 16, 0, 2 << 16, -2 << 16, 0 },
+        { 0, 2 << 16, 0, -2 << 16, 2 << 16, 0, 2 << 16, 2 << 16, 0 }
+    };
 
+    sdram[6] = NTRIS;
+    
+    int sdpos = 7;
+    for (int i = 0; i < NTRIS; ++i) {
+        VOLATILE_MEMCPY32(sdram + sdpos, tris[i], 9);
+        sdpos += 9;
+    }
+    
     *rtdev = 1;
-
+    
     int intrfd = open(RTINTR_SYSFS, O_RDONLY);
     if (intrfd == -1) {
         perror("intr sysfs open failed\n");
@@ -367,15 +374,17 @@ int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
         // case we probably want to reset the FPGA
     }
     close(intrfd);
-
+    
     int hit = sdram[6];
     int t = sdram[7];
     int tri_id = sdram[8];
-
+    
     printf("hit: %d, t: %d, tri_id: %d\n\n", hit, t, tri_id);
     return -1;
+    */
 
-    /*
+
+    
     int resX = data[1], resY = data[2];
     *pimg_size = resX * resY * 3;
 
@@ -394,8 +403,6 @@ int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
     const int* const FMtop = &data[data[9]];
     const int* const BVtop = &data[data[6]];
 
-    
-
     const int* Bvp = BVtop; // start of each BV
     const int* Vp = FVtop; // verts in each BV
 
@@ -404,6 +411,9 @@ int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
     //auto tbeg = std::chrono::high_resolution_clock::now(); // todo
 
     printf("Start raytracing...\n");
+
+    int nbatches = 0;
+    int nfailedbatches = 0;
 
     for (int i = 0; i < resY; ++i)
     {
@@ -426,12 +436,6 @@ int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
                     const int* vs = Vp;
                     int bv_ntris = Bvp[6];
 
-                    sdram[6] = bv_ntris;
-                    // Copy data to SDRAM.
-                    // this is slow. there are faster ways of doing this:
-                    // https://people.ece.cornell.edu/land/courses/ece5760/DE1_SOC/HPS_peripherials/FPGA_addr_index.html
-                    VOLATILE_MEMCPY32(sdram + 7, Vp, bv_ntris * 9);
-
                     int cpu_min_t = FIP_MAX;
                     int cpu_min_id = -1;
                     int cpu_hit = 0;
@@ -446,6 +450,14 @@ int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
                         }
                         vs += 9;
                     }
+
+                    // ---------- fgpa ----------------
+
+                    sdram[6] = bv_ntris;
+                    // Copy data to SDRAM.
+                    // this is slow. there are faster ways of doing this:
+                    // https://people.ece.cornell.edu/land/courses/ece5760/DE1_SOC/HPS_peripherials/FPGA_addr_index.html
+                    VOLATILE_MEMCPY32(sdram + 7, Vp, bv_ntris * 9);
 
                     *rtdev = 1; // start intersection
 
@@ -470,17 +482,25 @@ int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
                     int batch_t = sdram[7];
                     int batch_tri_id = sdram[8] + ((Vp - FVtop) / 9);
 
+                    if (sdram[8] >= bv_ntris) {
+                        printf("batch: %d, bad index of %d, %d\n", k, sdram[8], batch_tri_id);
+                        goto fail_rt;
+                    }
+
                     if (batch_hit && batch_t < min_t) {
                         min_t = batch_t;
                         min_tri_id = batch_tri_id;
                     }
 
-                    if (cpu_hit != batch_hit) {
-                        printf("batch id: %d\n", k);
+                    if (cpu_hit != batch_hit || cpu_min_t != batch_t || cpu_min_id != batch_tri_id) {
+                        printf("Failed batch id: %d\n", k);
                         printf("ray: %d %d %d %d %d %d\n", ray.origin[0], ray.origin[1], ray.origin[2], ray.dir[0], ray.dir[1], ray.dir[2]);
                         printf("cpu_hit: %d, cpu_t: %d, cpu_tri_id: %d\n", cpu_hit, cpu_min_t, cpu_min_id);
-                        printf("batch_hit: %d, batch_t: %d, batch_tri_id: %d\n\n", batch_hit, batch_t, batch_tri_id);
+                        printf("fpga_hit: %d, fpga_t: %d, fpga_tri_id: %d\n\n", batch_hit, batch_t, batch_tri_id);
+                        nfailedbatches++;
                     }
+
+                    nbatches++;
                 }
 
                 Vp += (Bvp[6] * 9);
@@ -513,6 +533,8 @@ int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
         // rdir += incr_dirv;
     }
 
+    printf("Failed %d out of %d batches\n", nfailedbatches, nbatches);
+
     printf("Finished raytracing\n");
     *pimg = (char*)pixelBuf;
     return 0;
@@ -520,8 +542,6 @@ int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
 fail_rt:
     free(pixelBuf);
     return -1;
-    */
-    return 0;
 
 
 
