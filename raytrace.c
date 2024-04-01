@@ -331,59 +331,75 @@ bool new_ray_intersect_tri(const int* vs, const Ray* ray, int* pt)
     else return false;
 }
 
+//#define DEBUG_RT 1
+#define SIMPLE_TEST 1
+
 int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
 {
     volatile int* sdram = (int*)(SDRAM);
     volatile uint8_t* rtdev = (uint8_t*)(LWBRIDGE + RAYTRACE_BASEOFF);
-    /*
-    // ray
-    sdram[0] = 0; sdram[1] = 0; sdram[2] = 1 << 16;
-    sdram[3] = 0; sdram[4] = 0; sdram[5] = -1 << 16;
-    
-    #define NTRIS 3
 
-    const int tris[NTRIS][9] = {
+#if SIMPLE_TEST
+    int tris[3][9] = {
         { 0, 2 << 16, -2 << 16, -2 << 16, -2 << 16, -2 << 16, 2 << 16, -2 << 16, -2 << 16 },
         { 0, 2 << 16, 0, -2 << 16, -2 << 16, 0, 2 << 16, -2 << 16, 0 },
         { 0, 2 << 16, 0, -2 << 16, 2 << 16, 0, 2 << 16, 2 << 16, 0 }
     };
+    
+    // ray
+    sdram[0] = 0; sdram[1] = 0; sdram[2] = 1 << 16;
+    sdram[3] = 0; sdram[4] = 0; sdram[5] = -1 << 16;
+    
+#define NTRIS 3
+#define NUM_RUNS 2
 
-    sdram[6] = NTRIS;
-    
-    int sdpos = 7;
-    for (int i = 0; i < NTRIS; ++i) {
-        VOLATILE_MEMCPY32(sdram + sdpos, tris[i], 9);
-        sdpos += 9;
-    }
-    
-    *rtdev = 1;
-    
-    int intrfd = open(RTINTR_SYSFS, O_RDONLY);
-    if (intrfd == -1) {
-        perror("intr sysfs open failed\n");
-        //goto fail_rt;
-        return -1;
-    }
-    uint8_t rtstat;
-    if (read(intrfd, &rtstat, 1) == -1)
+    for (int r = 0; r < NUM_RUNS; ++r)
     {
-        perror("intr sysfs read failed\n");
+        // move triangles behind by 2 units along z axis each run
+        for (int i = 0; i < NTRIS; ++i)
+        {
+            int moveby = (r * (2 << 16));
+            tris[i][2] -= moveby;
+            tris[i][5] -= moveby;
+            tris[i][8] -= moveby;
+        }
+
+        sdram[6] = NTRIS;
+
+        int sdpos = 7;
+        for (int i = 0; i < NTRIS; ++i) {
+            VOLATILE_MEMCPY32(sdram + sdpos, tris[i], 9);
+            sdpos += 9;
+        }
+
+        *rtdev = 1;
+
+        int intrfd = open(RTINTR_SYSFS, O_RDONLY);
+        if (intrfd == -1) {
+            perror("intr sysfs open failed\n");
+            //goto fail_rt;
+            return -1;
+        }
+        uint8_t rtstat;
+        if (read(intrfd, &rtstat, 1) == -1)
+        {
+            perror("intr sysfs read failed\n");
+            close(intrfd);
+            return -1;
+            // todo: read may also fail due to Ctrl+c. In this
+            // case we probably want to reset the FPGA
+        }
         close(intrfd);
-        return -1;
-        // todo: read may also fail due to Ctrl+c. In this
-        // case we probably want to reset the FPGA
+
+        int hit = sdram[6];
+        int t = sdram[7];
+        int tri_id = sdram[8];
+
+        printf("hit: %d, t: %d, tri_id: %d\n\n", hit, t, tri_id);
     }
-    close(intrfd);
-    
-    int hit = sdram[6];
-    int t = sdram[7];
-    int tri_id = sdram[8];
-    
-    printf("hit: %d, t: %d, tri_id: %d\n\n", hit, t, tri_id);
+
     return -1;
-    */
-
-
+#else
     
     int resX = data[1], resY = data[2];
     *pimg_size = resX * resY * 3;
@@ -542,7 +558,7 @@ int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
 fail_rt:
     free(pixelBuf);
     return -1;
-
+#endif
 
 
     //for (int i = 1; i < nrecv; ++i) {
