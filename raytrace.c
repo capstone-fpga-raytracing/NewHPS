@@ -331,15 +331,12 @@ bool new_ray_intersect_tri(const int* vs, const Ray* ray, int* pt)
     else return false;
 }
 
-//#define DEBUG_RT 1
-#define SIMPLE_TEST 1
-
 int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
 {
     volatile int* sdram = (int*)(SDRAM);
     volatile uint8_t* rtdev = (uint8_t*)(LWBRIDGE + RAYTRACE_BASEOFF);
 
-#if SIMPLE_TEST
+#ifdef SIMPLE_TEST
     int tris[3][9] = {
         { 0, 2 << 16, -2 << 16, -2 << 16, -2 << 16, -2 << 16, 2 << 16, -2 << 16, -2 << 16 },
         { 0, 2 << 16, 0, -2 << 16, -2 << 16, 0, 2 << 16, -2 << 16, 0 },
@@ -386,8 +383,8 @@ int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
             perror("intr sysfs read failed\n");
             close(intrfd);
             return -1;
-            // todo: read may also fail due to Ctrl+c. In this
-            // case we probably want to reset the FPGA
+            // todo: read may also fail due to Ctrl+c.
+            // in this case we should retry read and stop at next iter
         }
         close(intrfd);
 
@@ -395,12 +392,11 @@ int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
         int t = sdram[7];
         int tri_id = sdram[8];
 
-        printf("hit: %d, t: %d, tri_id: %d\n\n", hit, t, tri_id);
+        printf("hit: %d, t: %d, tri_id: %d\n", hit, t, tri_id);
     }
 
     return -1;
 #else
-    
     int resX = data[1], resY = data[2];
     *pimg_size = resX * resY * 3;
 
@@ -428,9 +424,10 @@ int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
 
     printf("Start raytracing...\n");
 
+#ifdef COMPARE_CPU_FPGA
     int nbatches = 0;
     int nfailedbatches = 0;
-
+#endif
     for (int i = 0; i < resY; ++i)
     {
         for (int j = 0; j < resX; ++j)
@@ -448,14 +445,13 @@ int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
             {
                 if (ray_intersect_box(&ray, Bvp))
                 {
-                    //printf("Processing BV %d\n", k);
-                    const int* vs = Vp;
                     int bv_ntris = Bvp[6];
-
+#ifdef COMPARE_CPU_FPGA
                     int cpu_min_t = FIP_MAX;
                     int cpu_min_id = -1;
                     int cpu_hit = 0;
 
+                    const int* vs = Vp;
                     for (int l = 0; l < bv_ntris; ++l)
                     {
                         int t;
@@ -466,7 +462,7 @@ int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
                         }
                         vs += 9;
                     }
-
+#endif
                     // ---------- fgpa ----------------
 
                     sdram[6] = bv_ntris;
@@ -489,34 +485,62 @@ int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
                         perror("intr sysfs read failed\n");
                         close(intrfd);
                         goto fail_rt;
-                        // todo: read may also fail due to Ctrl+c. In this
-                        // case we probably want to reset the FPGA
+                        // todo: read may also fail due to Ctrl+c.
+                        // in this case we should retry read and stop at next iter
                     }
                     close(intrfd);
 
                     int batch_hit = sdram[6];
-                    int batch_t = sdram[7];
-                    int batch_tri_id = sdram[8] + ((Vp - FVtop) / 9);
+                    int batch_t = FIP_MAX;
+                    int batch_tri_id = -1;
 
-                    if (sdram[8] >= bv_ntris) {
-                        printf("batch: %d, bad index of %d, %d\n", k, sdram[8], batch_tri_id);
-                        goto fail_rt;
+                    if (batch_hit) {
+                        batch_t = sdram[7];
+                        batch_tri_id = sdram[8] + ((Vp - FVtop) / 9);
                     }
-
-                    if (batch_hit && batch_t < min_t) {
-                        min_t = batch_t;
-                        min_tri_id = batch_tri_id;
-                    }
-
+#ifdef COMPARE_CPU_FPGA
                     if (cpu_hit != batch_hit || cpu_min_t != batch_t || cpu_min_id != batch_tri_id) {
-                        printf("Failed batch id: %d\n", k);
+                        printf("Failed batch! id: %d\n", k);
                         printf("ray: %d %d %d %d %d %d\n", ray.origin[0], ray.origin[1], ray.origin[2], ray.dir[0], ray.dir[1], ray.dir[2]);
                         printf("cpu_hit: %d, cpu_t: %d, cpu_tri_id: %d\n", cpu_hit, cpu_min_t, cpu_min_id);
                         printf("fpga_hit: %d, fpga_t: %d, fpga_tri_id: %d\n\n", batch_hit, batch_t, batch_tri_id);
                         nfailedbatches++;
+                        // todo: print all triangles
+                    }
+                    //else {
+                    //    printf("successful batch! id: %d\n", k);
+                    //    printf("ray: %d %d %d %d %d %d\n", ray.origin[0], ray.origin[1], ray.origin[2], ray.dir[0], ray.dir[1], ray.dir[2]);
+                    //    printf("cpu_hit: %d, cpu_t: %d, cpu_tri_id: %d\n", cpu_hit, cpu_min_t, cpu_min_id);
+                    //    printf("fpga_hit: %d, fpga_t: %d, fpga_tri_id: %d\n\n", batch_hit, batch_t, batch_tri_id);
+                    //}
+
+                    bool update_from_cpu = USE_CPU_RESULTS;
+
+                    if (batch_hit && sdram[8] >= bv_ntris) {
+                        printf("batch: %d, bad index of %d, %d. Segfault may follow\n", k, sdram[8], batch_tri_id);
+                        // todo: print all triangles
+                        //goto fail_rt;
+                        //update_from_cpu = 1;
+                    }
+
+                    if (update_from_cpu) {
+                        if (cpu_hit && cpu_min_t < min_t) {
+                            min_t = cpu_min_t;
+                            min_tri_id = cpu_min_id;
+                        }
+                    }
+                    else if (batch_hit && batch_t < min_t) {
+                        min_t = batch_t;
+                        min_tri_id = batch_tri_id;
                     }
 
                     nbatches++;
+#else
+                    if (batch_hit && batch_t < min_t) {
+                        min_t = batch_t;
+                        min_tri_id = batch_tri_id;
+                    }
+#endif
                 }
 
                 Vp += (Bvp[6] * 9);
@@ -549,7 +573,9 @@ int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
         // rdir += incr_dirv;
     }
 
+#ifdef COMPARE_CPU_FPGA
     printf("Failed %d out of %d batches\n", nfailedbatches, nbatches);
+#endif
 
     printf("Finished raytracing\n");
     *pimg = (char*)pixelBuf;
