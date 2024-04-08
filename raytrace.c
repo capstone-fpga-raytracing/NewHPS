@@ -6,6 +6,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <time.h>
 
 #include "arm_memmap.h"
 
@@ -424,6 +425,9 @@ int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
 
     printf("Start raytracing...\n");
 
+    struct timespec tbeg;
+    clock_gettime(CLOCK_MONOTONIC, &tbeg);
+
 #ifdef COMPARE_CPU_FPGA
     int nbatches = 0;
     int nfailedbatches = 0;
@@ -446,7 +450,7 @@ int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
                 if (ray_intersect_box(&ray, Bvp))
                 {
                     int bv_ntris = Bvp[6];
-#ifdef COMPARE_CPU_FPGA
+#if defined(COMPARE_CPU_FPGA) || defined(CPU_TEST)
                     int cpu_min_t = FIP_MAX;
                     int cpu_min_id = -1;
                     int cpu_hit = 0;
@@ -463,6 +467,12 @@ int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
                         vs += 9;
                     }
 #endif
+#ifdef CPU_TEST
+                    if (cpu_hit && cpu_min_t < min_t) {
+                        min_t = cpu_min_t;
+                        min_tri_id = cpu_min_id;
+                    }
+#else
                     // ---------- fgpa ----------------
 
                     sdram[6] = bv_ntris;
@@ -541,6 +551,7 @@ int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
                         min_tri_id = batch_tri_id;
                     }
 #endif
+#endif
                 }
 
                 Vp += (Bvp[6] * 9);
@@ -577,7 +588,11 @@ int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
     printf("Failed %d out of %d batches\n", nfailedbatches, nbatches);
 #endif
 
-    printf("Finished raytracing\n");
+    struct timespec tend;
+    clock_gettime(CLOCK_MONOTONIC, &tend);
+
+    printf("Finished raytracing in %lds, %ldns\n", 
+        tend.tv_sec - tbeg.tv_sec, tend.tv_nsec - tbeg.tv_nsec);
     *pimg = (char*)pixelBuf;
     return 0;
 
