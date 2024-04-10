@@ -5,3 +5,4 @@
 *.o
 *.srec
 *.objdump
+*.rbf
