@@ -113,7 +113,7 @@ void fip_normalize(int vec[3])
         vec[2] = fip_div(vec[2], norm);
     }
     else {
-        // unlikely. retry. may recurse!
+        // unlikely. retry.
         vec[0] <<= 2;
         vec[1] <<= 2;
         vec[2] <<= 2;
@@ -152,7 +152,7 @@ typedef struct Ray
     int dir[3];
 } Ray;
 
-void init_camera(const int* p, Camera* cam, int resX, int resY)
+void init_camera(const int* p, Camera* cam, int resX, int resY, bool fit_x)
 {
     int u[3], v[3], w[3];
     memcpy(cam->eye, p, sizeof(int) * 3); p += 3;
@@ -165,13 +165,23 @@ void init_camera(const int* p, Camera* cam, int resX, int resY)
 
     int world_du = fip_div(width, resX << 16);
     int world_dv = fip_div(height, resY << 16);
-    int aspratio = fip_div(resX << 16, resY << 16);
 
-    int base_u = fip_mult(aspratio >> 1, world_du - width);
-    int incr_u = fip_mult(aspratio, world_du);
+    //int aspratio = fip_div(resX << 16, resY << 16);
+    //int base_u = fip_mult(aspratio >> 1, world_du - width);
+    //int incr_u = fip_mult(aspratio, world_du);
 
-    int base_v = (height - world_dv) >> 1;
-    int incr_v = -world_dv;
+    // fixes the stretching. may not be mathematically sound
+    int world_del;
+    if (fit_x) {
+        world_del = resX > resY ? world_du : world_dv;
+    } else {
+        world_del = resY > resX ? world_du : world_dv;
+    }
+
+    int base_u = (world_del - width) >> 1;
+    int incr_u = world_del;
+    int base_v = (height - world_del) >> 1;
+    int incr_v = -world_del;
 
     cam->base_dir[0] = fip_mult(base_u, u[0]) + fip_mult(base_v, v[0]) - fip_mult(focal_len, w[0]);
     cam->base_dir[1] = fip_mult(base_u, u[1]) + fip_mult(base_v, v[1]) - fip_mult(focal_len, w[1]);
@@ -211,90 +221,7 @@ bool ray_intersect_box(const Ray* ray, const int* pbbox)
     return t_exit >= t_entry && t_exit >= 0;
 }
 
-#define FIP_AMB 0x00002000 // 0.125
-#define MATS_ELEM_SIZE 13
-#define LIGHTS_ELEM_SIZE 6
-#define FIP_ALMOST_ONE 0x0000ffff // largest below 1
-
-void new_blinn_phong_shading(
-    int* const o_total_light, // size=3
-    const struct Ray* i_ray,
-    const int hit_tri_id,
-    const int t, // hit distance
-    int num_lights,
-    const int* lights,
-    const int* mats,
-    const int* verts
-) {
-    int normal[3];
-    const int* vs = &verts[9 * hit_tri_id];
-    const int v[3][3] = {
-        { vs[0], vs[1], vs[2] },
-        { vs[3], vs[4], vs[5] },
-        { vs[6], vs[7], vs[8] },
-    };
-    const int edges[2][3] = {
-        { v[1][0] - v[0][0], v[1][1] - v[0][1], v[1][2] - v[0][2] }, // vert[1] - vert[0]
-        { v[2][0] - v[0][0], v[2][1] - v[0][1], v[2][2] - v[0][2] }, // vert[2] - vert[0]
-    };
-    fip_cross(edges[0], edges[1], normal);
-    fip_normalize(normal);
-
-    // material
-    int mat_idx = hit_tri_id * MATS_ELEM_SIZE;
-    const int ka[3] = { mats[mat_idx], mats[mat_idx + 1], mats[mat_idx + 2] };
-    const int kd[3] = { mats[mat_idx + 3], mats[mat_idx + 4], mats[mat_idx + 5] };
-    //int ks[3] = {i_ptrs->Mats[mat_idx[6], i_ptrs->Mats[mat_idx[7]], i_ptrs->Mats[mat_idx[8]]};
-
-    int hit_point[3];
-    hit_point[0] = i_ray->origin[0] + fip_mult(t, i_ray->dir[0]);
-    hit_point[1] = i_ray->origin[1] + fip_mult(t, i_ray->dir[1]);
-    hit_point[2] = i_ray->origin[2] + fip_mult(t, i_ray->dir[2]);
-
-    // ambient
-    o_total_light[0] = fip_mult(ka[0], FIP_AMB);
-    o_total_light[1] = fip_mult(ka[1], FIP_AMB);
-    o_total_light[2] = fip_mult(ka[2], FIP_AMB);
-
-    int lidx;
-    for (lidx = 0; lidx < num_lights * LIGHTS_ELEM_SIZE; lidx += LIGHTS_ELEM_SIZE)
-    {
-        const int* source = &lights[lidx]; // size=3
-        const int* color = source + 3; // size=3
-
-        // source - hit_point
-        int l_dir[3];
-        l_dir[0] = source[0] - hit_point[0];
-        l_dir[1] = source[1] - hit_point[1];
-        l_dir[2] = source[2] - hit_point[2];
-        // normalize
-        fip_normalize(l_dir);
-
-        // shadow: ignored for now
-
-        // diffuse
-        int diff_light_term = MAX(fip_mult(normal[0], l_dir[0]) +
-            fip_mult(normal[1], l_dir[1]) +
-            fip_mult(normal[2], l_dir[2]), 0);
-        int diff_light[3];
-        diff_light[0] = fip_mult(diff_light_term, fip_mult(kd[0], color[0]));
-        diff_light[1] = fip_mult(diff_light_term, fip_mult(kd[1], color[1]));
-        diff_light[2] = fip_mult(diff_light_term, fip_mult(kd[2], color[2]));
-
-        // specular: ignored for now
-
-        // update total_light
-        o_total_light[0] += diff_light[0];
-        o_total_light[1] += diff_light[1];
-        o_total_light[2] += diff_light[2];
-    }
-
-    // cut color > 1
-    o_total_light[0] = MIN(o_total_light[0], FIP_ALMOST_ONE);
-    o_total_light[1] = MIN(o_total_light[1], FIP_ALMOST_ONE);
-    o_total_light[2] = MIN(o_total_light[2], FIP_ALMOST_ONE);
-}
-
+#if defined(COMPARE_CPU_FPGA) || defined(CPU_TEST)
 bool new_ray_intersect_tri(const int* vs, const Ray* ray, int* pt)
 {
     // solve the system by Cramer's rule:
@@ -331,8 +258,298 @@ bool new_ray_intersect_tri(const int* vs, const Ray* ray, int* pt)
     }
     else return false;
 }
+#endif
 
-int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
+
+#define MATS_ELEM_SIZE 13
+#define LIGHTS_ELEM_SIZE 6
+#define FIP_ALMOST_ONE 0x0000ffff // largest below 1
+
+// Decrease this number if the image is too bright
+#define FIP_AMB 0x000000aa;
+
+inline __attribute__((always_inline)) 
+void new_blinn_phong_shading(
+    int* const o_total_light, // size=3
+    int* const o_normal, // size=3
+    int* const o_hit_pt, // size=3
+    const struct Ray* i_ray,
+    const int hit_tri_id,
+    const int t, // hit distance
+    int num_lights,
+    const int* lights,
+    const int* mats,
+    const int* verts
+) {
+    const int* vs = &verts[9 * hit_tri_id];
+    const int v[3][3] = {
+        { vs[0], vs[1], vs[2] },
+        { vs[3], vs[4], vs[5] },
+        { vs[6], vs[7], vs[8] },
+    };
+    const int edges[2][3] = {
+        { v[1][0] - v[0][0], v[1][1] - v[0][1], v[1][2] - v[0][2] }, // vert[1] - vert[0]
+        { v[2][0] - v[0][0], v[2][1] - v[0][1], v[2][2] - v[0][2] }, // vert[2] - vert[0]
+    };
+    fip_cross(edges[0], edges[1], o_normal);
+    fip_normalize(o_normal);
+
+    // material
+    int mat_idx = hit_tri_id * MATS_ELEM_SIZE;
+    const int ka[3] = { mats[mat_idx], mats[mat_idx + 1], mats[mat_idx + 2] };
+    const int kd[3] = { mats[mat_idx + 3], mats[mat_idx + 4], mats[mat_idx + 5] };
+    //int ks[3] = {i_ptrs->Mats[mat_idx[6], i_ptrs->Mats[mat_idx[7]], i_ptrs->Mats[mat_idx[8]]};
+
+    o_hit_pt[0] = i_ray->origin[0] + fip_mult(t, i_ray->dir[0]);
+    o_hit_pt[1] = i_ray->origin[1] + fip_mult(t, i_ray->dir[1]);
+    o_hit_pt[2] = i_ray->origin[2] + fip_mult(t, i_ray->dir[2]);
+
+    // ambient
+    o_total_light[0] = fip_mult(ka[0], FIP_AMB);
+    o_total_light[1] = fip_mult(ka[1], FIP_AMB);
+    o_total_light[2] = fip_mult(ka[2], FIP_AMB);
+
+    int lidx;
+    for (lidx = 0; lidx < num_lights * LIGHTS_ELEM_SIZE; lidx += LIGHTS_ELEM_SIZE)
+    {
+        const int* source = &lights[lidx]; // size=3
+        const int* color = source + 3; // size=3
+
+        // source - hit_point
+        int l_dir[3];
+        l_dir[0] = source[0] - o_hit_pt[0];
+        l_dir[1] = source[1] - o_hit_pt[1];
+        l_dir[2] = source[2] - o_hit_pt[2];
+        // normalize
+        fip_normalize(l_dir);
+
+        // shadow: ignored for now
+
+        // diffuse
+        int diff_dot =
+            fip_mult(o_normal[0], l_dir[0]) +
+            fip_mult(o_normal[1], l_dir[1]) +
+            fip_mult(o_normal[2], l_dir[2]);
+        int diff_light_term = MAX(diff_dot, 0);
+
+        int diff_light[3];
+        diff_light[0] = fip_mult(diff_light_term, fip_mult(kd[0], color[0]));
+        diff_light[1] = fip_mult(diff_light_term, fip_mult(kd[1], color[1]));
+        diff_light[2] = fip_mult(diff_light_term, fip_mult(kd[2], color[2]));
+
+        // specular: ignored for now
+
+        // update total_light
+        o_total_light[0] += diff_light[0];
+        o_total_light[1] += diff_light[1];
+        o_total_light[2] += diff_light[2];
+    }
+
+    // cut color > 1
+    o_total_light[0] = MIN(o_total_light[0], FIP_ALMOST_ONE);
+    o_total_light[1] = MIN(o_total_light[1], FIP_ALMOST_ONE);
+    o_total_light[2] = MIN(o_total_light[2], FIP_ALMOST_ONE);
+}
+
+
+// Wait for interrupt from FPGA
+bool wait_for_interrupt()
+{
+    int intrfd = open(RTINTR_SYSFS, O_RDONLY);
+    if (intrfd == -1) {
+        perror("intr sysfs open failed\n");
+        return false;
+    }
+    uint8_t rtstat;
+    if (read(intrfd, &rtstat, 1) == -1)
+    {
+        perror("intr sysfs read failed\n");
+        close(intrfd);
+        return false;
+        // todo: read may also fail due to Ctrl+c.
+        // in this case we should retry read and stop at next iter
+    }
+    close(intrfd);
+
+    return true;
+}
+
+// this looks acceptable.
+// Increase this number if the image is too noisy, at the cost of accuracy
+#define BOUNCE_EPS 0x00004000// 0x00000600 //0x00000440 
+
+// bounce ray from a surface with normal n
+void bounce(const Ray* in_ray, const int hit_pt[3], const int n[3], Ray* out_ray)
+{
+    out_ray->origin[0] = hit_pt[0] + fip_mult(BOUNCE_EPS, n[0]);
+    out_ray->origin[1] = hit_pt[1] + fip_mult(BOUNCE_EPS, n[1]);
+    out_ray->origin[2] = hit_pt[2] + fip_mult(BOUNCE_EPS, n[2]);
+
+    const int* idir = in_ray->dir;
+    int two_nl = 2 * (
+        fip_mult(-idir[0], n[0]) +
+        fip_mult(-idir[1], n[1]) +
+        fip_mult(-idir[2], n[2]));
+
+    out_ray->dir[0] = fip_mult(two_nl, n[0]) + idir[0];
+    out_ray->dir[1] = fip_mult(two_nl, n[1]) + idir[1];
+    out_ray->dir[2] = fip_mult(two_nl, n[2]) + idir[2];
+    fip_normalize(out_ray->dir);
+}
+
+#define MAX_BOUNCES 3
+
+int raycolor(
+    const Ray* ray,
+    const int* FVtop, const int* BVtop,
+    const int* FMtop, const int* Ltop,
+    int numBV, int numL,
+    int num_recur, int out_colr[3]
+)
+{
+    int min_t = FIP_MAX;
+    int min_tri_id = -1;
+
+    const int* Bvp = BVtop; // start of each BV
+    const int* Vp = FVtop; // verts in each BV
+
+    for (int k = 0; k < numBV; ++k)
+    {
+        if (ray_intersect_box(ray, Bvp))
+        {
+            int bv_ntris = Bvp[6];
+#if defined(COMPARE_CPU_FPGA) || defined(CPU_TEST)
+            int cpu_min_t = FIP_MAX;
+            int cpu_min_id = -1;
+            int cpu_hit = 0;
+
+            const int* vs = Vp;
+            for (int l = 0; l < bv_ntris; ++l)
+            {
+                int t;
+                if (new_ray_intersect_tri(vs, ray, &t) && t < cpu_min_t) {
+                    cpu_hit = 1;
+                    cpu_min_t = t;
+                    cpu_min_id = (vs - FVtop) / 9;
+                }
+                vs += 9;
+            }
+#endif
+#ifdef CPU_TEST
+            if (cpu_hit && cpu_min_t < min_t) {
+                min_t = cpu_min_t;
+                min_tri_id = cpu_min_id;
+            }
+#else
+            // ---------- fgpa ----------------
+
+            sdram[6] = bv_ntris;
+            // Copy data to SDRAM.
+            // this is slow. there are faster ways of doing this:
+            // https://people.ece.cornell.edu/land/courses/ece5760/DE1_SOC/HPS_peripherials/FPGA_addr_index.html
+            VOLATILE_MEMCPY32(sdram + 7, Vp, bv_ntris * 9);
+
+            *rtdev = 1; // start intersection
+
+            // wait for completion
+            if (!wait_for_interrupt()) {
+                return -1;
+            }
+
+            int batch_hit = sdram[6];
+            int batch_t = FIP_MAX;
+            int batch_tri_id = -1;
+
+            if (batch_hit) {
+                batch_t = sdram[7];
+                batch_tri_id = sdram[8] + ((Vp - FVtop) / 9);
+            }
+#ifdef COMPARE_CPU_FPGA
+            if (cpu_hit != batch_hit || cpu_min_t != batch_t || cpu_min_id != batch_tri_id) {
+                printf("Failed batch! id: %d\n", k);
+                printf("ray: %d %d %d %d %d %d\n", ray.origin[0], ray.origin[1], ray.origin[2], ray.dir[0], ray.dir[1], ray.dir[2]);
+                printf("cpu_hit: %d, cpu_t: %d, cpu_tri_id: %d\n", cpu_hit, cpu_min_t, cpu_min_id);
+                printf("fpga_hit: %d, fpga_t: %d, fpga_tri_id: %d\n\n", batch_hit, batch_t, batch_tri_id);
+                nfailedbatches++;
+                // todo: print all triangles
+            }
+            //else {
+            //    printf("successful batch! id: %d\n", k);
+            //    printf("ray: %d %d %d %d %d %d\n", ray.origin[0], ray.origin[1], ray.origin[2], ray.dir[0], ray.dir[1], ray.dir[2]);
+            //    printf("cpu_hit: %d, cpu_t: %d, cpu_tri_id: %d\n", cpu_hit, cpu_min_t, cpu_min_id);
+            //    printf("fpga_hit: %d, fpga_t: %d, fpga_tri_id: %d\n\n", batch_hit, batch_t, batch_tri_id);
+            //}
+
+            bool update_from_cpu = USE_CPU_RESULTS;
+
+            if (batch_hit && sdram[8] >= bv_ntris) {
+                printf("batch: %d, bad index of %d, %d. Segfault may follow\n", k, sdram[8], batch_tri_id);
+                // todo: print all triangles
+                //goto fail_rt;
+                //update_from_cpu = 1;
+            }
+
+            if (update_from_cpu) {
+                if (cpu_hit && cpu_min_t < min_t) {
+                    min_t = cpu_min_t;
+                    min_tri_id = cpu_min_id;
+                }
+            }
+            else if (batch_hit && batch_t < min_t) {
+                min_t = batch_t;
+                min_tri_id = batch_tri_id;
+            }
+
+            nbatches++;
+#else
+            if (batch_hit && batch_t < min_t) {
+                min_t = batch_t;
+                min_tri_id = batch_tri_id;
+            }
+#endif
+#endif
+        }
+
+        Vp += (Bvp[6] * 9);
+        Bvp += 7;
+    }
+
+    if (min_tri_id == -1) {
+        return 0;
+    }
+
+    int rgb[3]; int normal[3]; int hit_pt[3];
+    new_blinn_phong_shading(rgb, normal, hit_pt, ray, min_tri_id, min_t, numL, Ltop, FMtop, FVtop);
+
+    if (num_recur < MAX_BOUNCES)
+    {
+        Ray refl_ray;
+        bounce(ray, hit_pt, normal, &refl_ray);
+
+        int refl_rgb[3];
+        int ret = raycolor(&refl_ray, FVtop, BVtop, FMtop, Ltop, numBV, numL, num_recur + 1, refl_rgb);
+        if (ret == -1) return -1;
+
+        if (ret) {
+            // rgb += refl_rgb.cwiseProduct(km). 
+            // use this surface's km to infuse reflections with surface color
+            int mat_idx = min_tri_id * MATS_ELEM_SIZE;
+            rgb[0] += fip_mult(refl_rgb[0], FMtop[mat_idx + 9]);
+            rgb[1] += fip_mult(refl_rgb[1], FMtop[mat_idx + 10]);
+            rgb[2] += fip_mult(refl_rgb[2], FMtop[mat_idx + 11]);
+        }
+    }
+
+    rgb[0] = MIN(rgb[0], FIP_ALMOST_ONE);
+    rgb[1] = MIN(rgb[1], FIP_ALMOST_ONE);
+    rgb[2] = MIN(rgb[2], FIP_ALMOST_ONE);
+
+    memcpy(out_colr, rgb, 3 * sizeof(int));
+    return 1;
+}
+
+
+int raytrace(unsigned* data, int size, bool cam_fit_x, char** pimg, int* pimg_size)
 {
     volatile int* sdram = (int*)(SDRAM);
     volatile uint8_t* rtdev = (uint8_t*)(LWBRIDGE + RAYTRACE_BASEOFF);
@@ -371,23 +588,9 @@ int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
         }
 
         *rtdev = 1;
-
-        int intrfd = open(RTINTR_SYSFS, O_RDONLY);
-        if (intrfd == -1) {
-            perror("intr sysfs open failed\n");
-            //goto fail_rt;
+        if (!wait_for_interrupt()) {
             return -1;
         }
-        uint8_t rtstat;
-        if (read(intrfd, &rtstat, 1) == -1)
-        {
-            perror("intr sysfs read failed\n");
-            close(intrfd);
-            return -1;
-            // todo: read may also fail due to Ctrl+c.
-            // in this case we should retry read and stop at next iter
-        }
-        close(intrfd);
 
         int hit = sdram[6];
         int t = sdram[7];
@@ -402,7 +605,7 @@ int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
     *pimg_size = resX * resY * 3;
 
     Camera cam;
-    init_camera(&data[data[5]], &cam, resX, resY);
+    init_camera(&data[data[5]], &cam, resX, resY, cam_fit_x);
 
     Ray ray;
     memcpy(ray.origin, cam.eye, 3 * sizeof(int));
@@ -415,9 +618,6 @@ int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
     const int* const Ltop = &data[data[10]];
     const int* const FMtop = &data[data[9]];
     const int* const BVtop = &data[data[6]];
-
-    const int* Bvp = BVtop; // start of each BV
-    const int* Vp = FVtop; // verts in each BV
 
     byte* pixelBuf = (byte*)malloc(resX * resY * 3);
 
@@ -436,136 +636,16 @@ int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
     {
         for (int j = 0; j < resX; ++j)
         {
-            int min_t = FIP_MAX;
-            int min_tri_id = -1;
-
-            Vp = FVtop;
-            Bvp = BVtop;
-
+#ifndef CPU_TEST
             VOLATILE_MEMCPY32(sdram, ray.origin, 3);
             VOLATILE_MEMCPY32(sdram + 3, ray.dir, 3);
-
-            for (int k = 0; k < numBV; ++k)
-            {
-                if (ray_intersect_box(&ray, Bvp))
-                {
-                    int bv_ntris = Bvp[6];
-#if defined(COMPARE_CPU_FPGA) || defined(CPU_TEST)
-                    int cpu_min_t = FIP_MAX;
-                    int cpu_min_id = -1;
-                    int cpu_hit = 0;
-
-                    const int* vs = Vp;
-                    for (int l = 0; l < bv_ntris; ++l)
-                    {
-                        int t;
-                        if (new_ray_intersect_tri(vs, &ray, &t) && t < cpu_min_t) {
-                            cpu_hit = 1;
-                            cpu_min_t = t;
-                            cpu_min_id = (vs - FVtop) / 9;
-                        }
-                        vs += 9;
-                    }
 #endif
-#ifdef CPU_TEST
-                    if (cpu_hit && cpu_min_t < min_t) {
-                        min_t = cpu_min_t;
-                        min_tri_id = cpu_min_id;
-                    }
-#else
-                    // ---------- fgpa ----------------
+            int colr[3] = { 17990, 17990, 17990 }; // gray
+            raycolor(&ray, FVtop, BVtop, FMtop, Ltop, numBV, numL, 0, colr);
 
-                    sdram[6] = bv_ntris;
-                    // Copy data to SDRAM.
-                    // this is slow. there are faster ways of doing this:
-                    // https://people.ece.cornell.edu/land/courses/ece5760/DE1_SOC/HPS_peripherials/FPGA_addr_index.html
-                    VOLATILE_MEMCPY32(sdram + 7, Vp, bv_ntris * 9);
-
-                    *rtdev = 1; // start intersection
-
-                    // Wait for interrupt from FPGA
-                    int intrfd = open(RTINTR_SYSFS, O_RDONLY);
-                    if (intrfd == -1) {
-                        perror("intr sysfs open failed\n");
-                        goto fail_rt;
-                    }
-                    uint8_t rtstat;
-                    if (read(intrfd, &rtstat, 1) == -1)
-                    {
-                        perror("intr sysfs read failed\n");
-                        close(intrfd);
-                        goto fail_rt;
-                        // todo: read may also fail due to Ctrl+c.
-                        // in this case we should retry read and stop at next iter
-                    }
-                    close(intrfd);
-
-                    int batch_hit = sdram[6];
-                    int batch_t = FIP_MAX;
-                    int batch_tri_id = -1;
-
-                    if (batch_hit) {
-                        batch_t = sdram[7];
-                        batch_tri_id = sdram[8] + ((Vp - FVtop) / 9);
-                    }
-#ifdef COMPARE_CPU_FPGA
-                    if (cpu_hit != batch_hit || cpu_min_t != batch_t || cpu_min_id != batch_tri_id) {
-                        printf("Failed batch! id: %d\n", k);
-                        printf("ray: %d %d %d %d %d %d\n", ray.origin[0], ray.origin[1], ray.origin[2], ray.dir[0], ray.dir[1], ray.dir[2]);
-                        printf("cpu_hit: %d, cpu_t: %d, cpu_tri_id: %d\n", cpu_hit, cpu_min_t, cpu_min_id);
-                        printf("fpga_hit: %d, fpga_t: %d, fpga_tri_id: %d\n\n", batch_hit, batch_t, batch_tri_id);
-                        nfailedbatches++;
-                        // todo: print all triangles
-                    }
-                    //else {
-                    //    printf("successful batch! id: %d\n", k);
-                    //    printf("ray: %d %d %d %d %d %d\n", ray.origin[0], ray.origin[1], ray.origin[2], ray.dir[0], ray.dir[1], ray.dir[2]);
-                    //    printf("cpu_hit: %d, cpu_t: %d, cpu_tri_id: %d\n", cpu_hit, cpu_min_t, cpu_min_id);
-                    //    printf("fpga_hit: %d, fpga_t: %d, fpga_tri_id: %d\n\n", batch_hit, batch_t, batch_tri_id);
-                    //}
-
-                    bool update_from_cpu = USE_CPU_RESULTS;
-
-                    if (batch_hit && sdram[8] >= bv_ntris) {
-                        printf("batch: %d, bad index of %d, %d. Segfault may follow\n", k, sdram[8], batch_tri_id);
-                        // todo: print all triangles
-                        //goto fail_rt;
-                        //update_from_cpu = 1;
-                    }
-
-                    if (update_from_cpu) {
-                        if (cpu_hit && cpu_min_t < min_t) {
-                            min_t = cpu_min_t;
-                            min_tri_id = cpu_min_id;
-                        }
-                    }
-                    else if (batch_hit && batch_t < min_t) {
-                        min_t = batch_t;
-                        min_tri_id = batch_tri_id;
-                    }
-
-                    nbatches++;
-#else
-                    if (batch_hit && batch_t < min_t) {
-                        min_t = batch_t;
-                        min_tri_id = batch_tri_id;
-                    }
-#endif
-#endif
-                }
-
-                Vp += (Bvp[6] * 9);
-                Bvp += 7;
-            }
-
-            int light[3] = { 17990, 17990, 17990 }; // gray
-            if (min_tri_id != -1) {
-                new_blinn_phong_shading(light, &ray, min_tri_id, min_t, numL, Ltop, FMtop, FVtop);
-            }
-
-            pixelBuf[3 * (resX * i + j) + 0] = (byte)(light[0] >> 8);
-            pixelBuf[3 * (resX * i + j) + 1] = (byte)(light[1] >> 8);
-            pixelBuf[3 * (resX * i + j) + 2] = (byte)(light[2] >> 8);
+            pixelBuf[3 * (resX * i + j) + 0] = (byte)(colr[0] >> 8);
+            pixelBuf[3 * (resX * i + j) + 1] = (byte)(colr[1] >> 8);
+            pixelBuf[3 * (resX * i + j) + 2] = (byte)(colr[2] >> 8);
 
             ray.dir[0] += cam.incr_diru[0];
             ray.dir[1] += cam.incr_diru[1];
@@ -590,9 +670,8 @@ int raytrace(unsigned* data, int size, char** pimg, int* pimg_size)
 
     struct timespec tend;
     clock_gettime(CLOCK_MONOTONIC, &tend);
+    printf("Finished raytracing in %lds\n", tend.tv_sec - tbeg.tv_sec);
 
-    printf("Finished raytracing in %lds, %ldns\n", 
-        tend.tv_sec - tbeg.tv_sec, tend.tv_nsec - tbeg.tv_nsec);
     *pimg = (char*)pixelBuf;
     return 0;
 

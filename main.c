@@ -1,5 +1,6 @@
 
 #include <stdlib.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -99,15 +100,27 @@ void sigint_handler(int signum)
     }
 }
 
-// serialized data, format in host.
-extern int raytrace(unsigned* data, int size, char** pimg, int* pimg_size);
-
+extern int raytrace(unsigned* data, int size, bool cam_fit_x, char** pimg, int* pimg_size);
 
 int main(int argc, char** argv)
 {
     bool verbose = false;
-    if (argc == 2 && (strcmp(argv[1], "-v") == 0 || strcmp(argv[1], "--verbose") == 0)) {
-        verbose = true;
+    bool cam_fit_x = false;
+
+    if (argc > 1) {
+        for (int i = 1; i < argc; ++i) 
+        {
+            if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
+                verbose = true;
+            } else if (strcmp(argv[i], "--cam-fit_x") == 0) {
+                cam_fit_x = true;
+            } else if (strcmp(argv[i], "--cam_fit_y") == 0) {
+                cam_fit_x = false;
+            } else {
+                printf("Unrecognized option %s\n", argv[i]);
+                return -1;
+            }
+        }
     }
 
     if (map_devices() != 0) {
@@ -172,7 +185,7 @@ int main(int argc, char** argv)
         
         char* sendbuf;
         int img_size;
-        if (raytrace(data, nrecv / 4, &sendbuf, &img_size) != 0) {
+        if (raytrace(data, nrecv / 4, cam_fit_x, &sendbuf, &img_size) != 0) {
             free(recvbuf);
             goto fail_rt;
         }
