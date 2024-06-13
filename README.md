@@ -11,7 +11,7 @@ The code here targets this version of Linux. It consists of 3 parts:
 ## Instructions
 - Setup the NewFPGA repo first! It contains instructions on compiling the FPGA core and booting DE1-SoC Linux.
 - Clone this repo using `git clone --recursive https://github.com/capstone-team-2023844-fpga-raytracing/NewHPS.git`. Note the `--recursive`.
-- Transfer this repo to the DE1-SoC (see NewFPGA repo for how), and compile everything:
+- Transfer this repo to the DE1-SoC (see NewFPGA for how), then perform the following steps on the DE1 Linux remote shell:
   - server + shader: `gcc main.c raytrace.c ext/IO/io.c -I ext/IO -O3 -std=gnu99 -lm -lrt`.
   - kernel driver:
      - `cd` to the kernel/ directory and type `make` to build. This produces a .ko driver file. If you see errors, trying setting the date and time first eg. `date -s '2023-12-25 12:34:56'`.
