@@ -100,12 +100,13 @@ void sigint_handler(int signum)
     }
 }
 
-extern int raytrace(unsigned* data, int size, bool cam_fit_x, char** pimg, int* pimg_size);
+extern int raytrace(unsigned* data, int size, bool cam_fit_x, int max_bounces, char** pimg, int* pimg_size);
 
 int main(int argc, char** argv)
 {
     bool verbose = false;
     bool cam_fit_x = false;
+    int max_bounces = 3;
 
     if (argc > 1) {
         for (int i = 1; i < argc; ++i) 
@@ -116,6 +117,8 @@ int main(int argc, char** argv)
                 cam_fit_x = true;
             } else if (strcmp(argv[i], "--cam_fit_y") == 0) {
                 cam_fit_x = false;
+            } else if (strcmp(argv[i], "--disable_refl") == 0) {
+                max_bounces = 0;
             } else {
                 printf("Unrecognized option %s\n", argv[i]);
                 return -1;
@@ -185,7 +188,7 @@ int main(int argc, char** argv)
         
         char* sendbuf;
         int img_size;
-        if (raytrace(data, nrecv / 4, cam_fit_x, &sendbuf, &img_size) != 0) {
+        if (raytrace(data, nrecv / 4, cam_fit_x, max_bounces, &sendbuf, &img_size) != 0) {
             free(recvbuf);
             goto fail_rt;
         }

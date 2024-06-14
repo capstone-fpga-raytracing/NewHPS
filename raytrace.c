@@ -265,10 +265,9 @@ bool new_ray_intersect_tri(const int* vs, const Ray* ray, int* pt)
 #define LIGHTS_ELEM_SIZE 6
 #define FIP_ALMOST_ONE 0x0000ffff // largest below 1
 
-// Decrease this number if the image is too bright
-#define FIP_AMB 0x000000aa;
+// Increase this number to increase image brightness
+#define FIP_AMB 0
 
-inline __attribute__((always_inline)) 
 void new_blinn_phong_shading(
     int* const o_total_light, // size=3
     int* const o_normal, // size=3
@@ -397,7 +396,10 @@ void bounce(const Ray* in_ray, const int hit_pt[3], const int n[3], Ray* out_ray
     fip_normalize(out_ray->dir);
 }
 
-#define MAX_BOUNCES 3
+static int MAX_BOUNCES;
+
+static volatile int* sdram;
+static volatile uint8_t* rtdev;
 
 int raycolor(
     const Ray* ray,
@@ -412,6 +414,9 @@ int raycolor(
 
     const int* Bvp = BVtop; // start of each BV
     const int* Vp = FVtop; // verts in each BV
+
+    VOLATILE_MEMCPY32(sdram, ray->origin, 3);
+    VOLATILE_MEMCPY32(sdram + 3, ray->dir, 3);
 
     for (int k = 0; k < numBV; ++k)
     {
@@ -540,19 +545,22 @@ int raycolor(
         }
     }
 
-    rgb[0] = MIN(rgb[0], FIP_ALMOST_ONE);
-    rgb[1] = MIN(rgb[1], FIP_ALMOST_ONE);
-    rgb[2] = MIN(rgb[2], FIP_ALMOST_ONE);
-
+    if (MAX_BOUNCES > 0) {
+        rgb[0] = MIN(rgb[0], FIP_ALMOST_ONE);
+        rgb[1] = MIN(rgb[1], FIP_ALMOST_ONE);
+        rgb[2] = MIN(rgb[2], FIP_ALMOST_ONE);
+    }
+    
     memcpy(out_colr, rgb, 3 * sizeof(int));
     return 1;
 }
 
 
-int raytrace(unsigned* data, int size, bool cam_fit_x, char** pimg, int* pimg_size)
+int raytrace(unsigned* data, int size, bool cam_fit_x, int max_bounces, char** pimg, int* pimg_size)
 {
-    volatile int* sdram = (int*)(SDRAM);
-    volatile uint8_t* rtdev = (uint8_t*)(LWBRIDGE + RAYTRACE_BASEOFF);
+    sdram = (volatile int*)(SDRAM);
+    rtdev = (volatile uint8_t*)(LWBRIDGE + RAYTRACE_BASEOFF);
+    MAX_BOUNCES = max_bounces;
 
 #ifdef SIMPLE_TEST
     int tris[3][9] = {
@@ -636,10 +644,6 @@ int raytrace(unsigned* data, int size, bool cam_fit_x, char** pimg, int* pimg_si
     {
         for (int j = 0; j < resX; ++j)
         {
-#ifndef CPU_TEST
-            VOLATILE_MEMCPY32(sdram, ray.origin, 3);
-            VOLATILE_MEMCPY32(sdram + 3, ray.dir, 3);
-#endif
             int colr[3] = { 17990, 17990, 17990 }; // gray
             raycolor(&ray, FVtop, BVtop, FMtop, Ltop, numBV, numL, 0, colr);
 
