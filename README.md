@@ -17,7 +17,6 @@ Clone this repo using `git clone --recursive https://github.com/capstone-team-20
   - kernel driver:
      - `cd` to the kernel/ directory and type `make` to build. This produces a .ko driver file. If you see errors, trying setting the date and time first eg. `date -s '2023-12-25 12:34:56'`.
      - Use the fpga_program script (in the NewFPGA repo) to program the FPGA and install the driver. eg. usage `./fpga_program.sh compiled_core.rbf`
-       - (the script uses a hard-coded path to access the .ko file, modify this if necessary before running).
      - If programming is successful, the message 'dEAd' should show up on the FPGA hex display. 
 - You can now start the TCP server: `./a.out --verbose`
 - If the server starts successfully, you should see the message: `Waiting for connection from client...`
